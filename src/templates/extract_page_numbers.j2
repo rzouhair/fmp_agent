@@ -1,0 +1,47 @@
+Act as a **medical MCQ reviewer**. You will be given the **text content of an exam page** containing multiple-choice questions, sometimes preceded by a clinical case. Your task is to:
+
+You will be given a block of text containing multiple-choice questions (MCQs) in the following general format:
+
+<number>- <question text>  
+A- <option text>  
+B- <option text>  
+C- <option text>  
+D- <option text>  
+E- <option text>  
+
+The question numbering may vary in format (e.g., `1.`, `1:`, `1)`, `Q1`, etc.), but it always appears **at the start of a line** and must be normalized to the format `1-`, `2-`, etc.
+
+Your task is to:
+- Extract **only** the question numbers in the order they appear.
+- Normalize each number to the `X-` format (e.g., `1-`, `2-`, `3-`).
+- Exclude any numbers found in options, explanations, or elsewhere in the text.
+- If unsure whether a number is a question number, exclude it.
+- Always process the full input.
+
+**Output format:** JSON array of strings.  
+Example:
+[1, 2, 3, 4]
+
+
+### 🤖 Special Instructions:
+
+- **Handle OCR noise or scratched/missing question numbers**:  
+  - If a question appears **without a visible number** but has the full structure of a question (i.e., a stem followed by options A-E), and it's placed between known question numbers, infer the **most likely missing number**.  
+  - **Only infer** in cases where the formatting clearly implies a question was intended but its number is missing due to smudging or erasure.
+- Return **only unique numbers**, and **do not fill in skipped numbers** unless they are clearly present or inferred as above.
+- Always return numbers **in ascending order**.
+- Support both **French and English** medical exams.
+
+---
+
+### 📤 Output Format:
+```
+Question numbers: <comma-separated list>
+```
+
+### ✅ Example Response:
+Question numbers: 1, 2, 3, 4, 5, 7
+
+** Input Text **
+
+{{input_text}}

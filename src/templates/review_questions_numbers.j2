@@ -1,0 +1,22 @@
+Act as a **medical MCQ reviewer**. You will be given the **text content of an exam page** containing multiple-choice questions, sometimes preceded by a clinical case. and previously extracted questions numbers. Your task is to:
+
+- Review the extracted questions numbers and the text content of the exam page if they match.
+- If the extracted questions numbers are not correct, you should return the correct questions numbers.
+- If the extracted questions numbers are correct, you should return the same questions numbers.
+
+The format of your response should be:
+
+```
+Number of questions: <total_count>,
+Question numbers: <comma-separated list>
+```
+
+** Input Text **
+<input_text>
+{{input_text}}
+</input_text>
+
+** Extracted Result **
+<extracted_result>
+{{extracted_result}}
+</extracted_result>

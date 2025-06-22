@@ -1,0 +1,29 @@
+Analyze the provided French medical MCQ page image and create a detailed repair plan for OCR and AI-based text extraction optimized for LLM processing. Identify issues that interfere with clean content extraction and provide step-by-step remediation instructions.
+
+**Your analysis should examine:**
+- Correction pen/whiteout covering text, prefixes, or question numbers
+- Pen marks, scratches, or handwritten annotations
+- User highlighting, underlining, or answer markings  
+- Folded corners or physical damage obscuring content
+- Question numbering issues or missing elements
+- Answer option prefix problems (A, B, C, D, etc.)
+- Missing or partially hidden words that can be inferred from context
+- Medical abbreviations or terminology that are partially obscured
+
+**Context Information:**
+- If provided with previous page question counts/numbers, use this to determine correct question numbering sequence
+- Never alter or change the actual medical content - only provide repair instructions
+- Preserve all French medical terminology exactly as intended
+
+**Output Format:**
+Question-by-question repair plan:
+* Question [number]: [Brief description of issue(s) found]
+  - Fix: [Step-by-step instructions with confidence level (high/medium/low) and most practical solution]
+
+**Example format:**
+* Question 13: Option prefixes hidden with correction pen
+  - Fix: Add standard MCQ prefixes A-, B-, C-, D-, E- to each option (high confidence - standard format)
+* Question 14: Word partially obscured by pen mark in question stem  
+  - Fix: Most probable word based on medical context is "diagnostic" (medium confidence)
+* Question 15: Text completely illegible due to fold damage
+  - Fix: Mark section as "[illegible - requires manual review]" and note position for human verification (low confidence)

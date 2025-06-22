@@ -1,0 +1,49 @@
+{% if review %}
+You have failed to extract the questions correctly as requested.
+
+{{ review }}
+
+Please try again, and make sure you extract the questions with the numberings {{ questions_numbering }}.
+{% endif %}
+
+
+You will be given a block of text containing one or more multiple-choice questions.
+Each question starts with a number (e.g., `34.` or `35:`), followed by the question text, then a list of options.
+Each option starts with a capital letter followed by a punctuation mark (`A.`, `A-`, `A:`) and the answer text.
+Questions and options may span multiple lines, and line breaks are not guaranteed between them.
+
+Your task is to extract each question into a structured format using the following this format * Only return questions with numberings: {{ questions_numbering }}
+
+
+# Question <numbering>
+<numbering>- Question text...
+A- Option text...
+B- Option text...
+C- Option text...
+D- Option text...
+E- Option text...
+...
+
+
+* Ensure each `Question` object contains:
+  * The full question text as `question`
+  * A list of clean `option` strings, each in its own `QuestionOption`
+
+* Return the output as a list of JSON objects, fully matching the schema above.
+
+* Do not include explanations or any extra commentary.
+
+* Mandatorily return the questions with the numberings {{ questions_numbering }}.
+{% if review %}
+* If you don't include the questions with the numberings {{ questions_numbering }}, You will be punished, and fired!!!
+{{ review }}
+{% endif %}
+
+* Carefully extract the questions with numbering and options from the page text content without clipping, removal, alteration or any other modification.
+
+** Input **
+---
+<page_text_content>
+{{ page_text_content }}
+</page_text_content>
+---
