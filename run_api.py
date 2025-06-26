@@ -12,7 +12,7 @@ if __name__ == "__main__":
     print("💊 Health Check: http://localhost:8000/health")
     
     uvicorn.run(
-        "src.api:app",  # Import string instead of app object
+        "src.gapi:app",  # Import string instead of app object
         host="0.0.0.0",
         port=8000,
         reload=True,  # Enable auto-reload during development

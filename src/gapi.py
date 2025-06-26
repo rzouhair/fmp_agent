@@ -2,15 +2,15 @@ import tempfile
 import os
 import traceback
 import base64
-from typing import List, Dict, Any
+from typing import List, Dict
 from fastapi import FastAPI, HTTPException, Body
-from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
-from src.models import ClinicalCaseResponse, ExtractionResponse, OptionResponse, QuestionResponse
+from src.api import ExtractionResponse, OptionResponse, QuestionResponse
+from src.gemini_workflow import GeminiWorkflow
 
-from .workflow import Workflow
-from .utils.pdf import extract_pdf_pages_as_images
+from .models import ClinicalCaseResponse, DocumentExtractionState, PageQuestionsNumbers
+
 
 class Base64FileRequest(BaseModel):
     base64: str = Field(..., description="Base64 encoded PDF file data")
@@ -66,57 +66,72 @@ async def extract_questions_from_pdf(
             temp_file.flush()
         
         # Process the PDF through the workflow
-        workflow = Workflow()
+        workflow = GeminiWorkflow()
         
         # Run the workflow with the temporary PDF file
-        final_state = await workflow.run(pdf_path=temp_file_path)
-        
-        # Convert the extracted questions to response format
-        questions_response = []
-        for question in final_state.exam_questions:
+        final_state: DocumentExtractionState = await workflow.run(pdf_path=temp_file_path)
+
+        print(f"Final State: {final_state.pages_clinical_cases}")
+
+        questions_response: List[QuestionResponse] = []
+
+        clinical_cases_response: List[ClinicalCaseResponse] = []
+        for clinical_case in final_state.pages_clinical_cases:
+            clinical_cases_response.append(ClinicalCaseResponse(
+                question_numbers=clinical_case.question_numbers,
+                clinical_case=clinical_case.clinical_case,
+                type="clinicalCase",
+                images=[]
+            ))
+
+        import re
+        for question in final_state.questions:
             question_response = QuestionResponse(
                 questionString=question.question,
                 explanation="",
                 tag="",
-                options=[OptionResponse(option=option.option, isCorrect=False, justification="", images=[]) for option in question.options]
+                options=[
+                    OptionResponse(
+                        option=re.sub(r"^[A-Z](?:[\)\-\\\.]| -|\. |- )\s*", "", option.option.strip()),
+                        isCorrect=False,
+                        justification="",
+                        images=[]
+                    )
+                    for option in question.options
+                ]
             )
             questions_response.append(question_response)
 
-        clinical_cases_response: List[ClinicalCaseResponse] = []
-        for page_index, clinical_cases in final_state.pages_clinical_cases_map.items():
-            
-            if len(final_state.pages_questions_map[f"{page_index}"].question_numbers) > 0:
-                first_question_number = final_state.pages_questions_map[f"{page_index}"].question_numbers[0]
+        page_numbers: List[List[int]] = []
+        for page_index, page_data_item in enumerate(final_state.pages_data.data):
+            questions_sequence = list(range(page_data_item.start_question_number - 1, page_data_item.end_question_number))
+
+            if page_data_item.is_instructions_page or page_data_item.is_corrections_table_page or len(questions_sequence) > 9 or questions_sequence[0] < 0 :
+              page_numbers.append([])
+
             else:
-                first_question_number = None
-            for clinical_case_text in clinical_cases:
-                cc_resp = ClinicalCaseResponse(
-                    question_numbers=[first_question_number if first_question_number is not None else 0],
-                    clinical_case=clinical_case_text,
-                    type="clinicalCase",
-                    images=[],
-                )
+              page_numbers.append(questions_sequence)
 
-                clinical_cases_response.append(cc_resp)
 
-        final_page_numbers = []
-        for page_index, page_numbers in final_state.pages_questions_map.items():
-            final_page_numbers.append(list(map(lambda x: x - 1, page_numbers.question_numbers)))
+        pages_questions_map: Dict[str, PageQuestionsNumbers] = {}
 
-        # Remove the temporary file after finishing the extraction
-        if temp_file_path and os.path.exists(temp_file_path):
-            try:
-                os.unlink(temp_file_path)
-            except Exception as e:
-                print(f"Warning: Could not delete temporary file {temp_file_path}: {e}")
+        print(ExtractionResponse(
+            success=True,
+            total_questions=len(questions_response),
+            questions=questions_response,
+            clinical_cases=clinical_cases_response,
+            pages_questions_map=pages_questions_map,
+            page_numbers=page_numbers,
+            message=f"Successfully extracted {len(questions_response)} questions from {filename}"
+        ))
 
         return ExtractionResponse(
             success=True,
             total_questions=len(questions_response),
             questions=questions_response,
             clinical_cases=clinical_cases_response,
-            pages_questions_map=final_state.pages_questions_map,
-            page_numbers=final_page_numbers,
+            pages_questions_map=pages_questions_map,
+            page_numbers=page_numbers,
             message=f"Successfully extracted {len(questions_response)} questions from {filename}"
         )
         

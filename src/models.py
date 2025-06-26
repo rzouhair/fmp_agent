@@ -3,6 +3,24 @@ from operator import add
 from typing import Annotated, List, Optional, Dict, Any
 from pydantic import BaseModel, Field
 
+class OptionResponse(BaseModel):
+    option: str
+    isCorrect: bool = False
+    justification: str = ""
+    images: List[str] = []
+
+class QuestionResponse(BaseModel):
+    questionString: str
+    explanation: str = ""
+    tag: str = None
+    options: List[OptionResponse]
+
+
+class ClinicalCaseResponse(BaseModel):
+    question_numbers: List[int] = []
+    clinical_case: str
+    type: str = "clinicalCase"
+    images: List[str] = []
 
 class QuestionOption(BaseModel):
     option: str
@@ -57,6 +75,47 @@ class ExtractionState(BaseModel):
     pages_clinical_cases_map: Dict[str, List[str]] = {}
 
     # List of all extracted questions from the exam, accumulated as they are assigned
+    exam_questions: List[Question] = []
+    formatted_questions: List[Any] = []
+
+class ExtractionResponse(BaseModel):
+    success: bool
+    total_questions: int
+    clinical_cases: List[ClinicalCaseResponse]
+    questions: List[QuestionResponse]
+    pages_questions_map: Dict[str, PageQuestionsNumbers]
+    page_numbers: List[List[int]]
+    message: str = ""
+
+
+class PageData(BaseModel):
+    start_question_number: int
+    end_question_number: int
+    questions_count: int
+    is_instructions_page: bool
+    is_corrections_table_page: bool
+
+class PageDataOutput(BaseModel):
+    data: List[PageData]
+
+class DocumentClinicalCase(BaseModel):
+    clinical_case: str = Field(description="The clinical case text")
+    start_question_number: int = Field(description="The start question number of the clinical case")
+    end_question_number: int = Field(description="The end question number of the clinical case")
+
+class DocumentClinicalCaseOutput(BaseModel):
+    data: List[DocumentClinicalCase]
+
+class DocumentExtractionState(BaseModel):
+
+    exam_images: List[str] = []
+
+    pages_data: PageDataOutput = PageDataOutput(data=[])
+    questions: List[Question] = []
+
+    pages_clinical_cases: List[ClinicalCaseResponse] = []
+    output_clinical_cases: List[ClinicalCaseResponse] = []
+
     exam_questions: List[Question] = []
     formatted_questions: List[Any] = []
 
