@@ -12,6 +12,8 @@ E- <option text>
 The question numbering may vary in format (e.g., `1.`, `1:`, `1)`, `Q1`, etc.), but it always appears **at the start of a line** and must be normalized to the format `1-`, `2-`, etc.
 
 Your task is to:
+
+* Disregard and exclude any page instructions, correction table, or any other text that is not a question with question text and options in alphabetical order. Correction tables often have a table with all question numbers like (Q1, Q2, Q3, etc.) and checkboxes to mark the correct answers. YOU NEED TO IGNORE THEM.
 - Extract **only** the question numbers in the order they appear.
 - Normalize each number to the `X-` format (e.g., `1-`, `2-`, `3-`).
 - Exclude any numbers found in options, explanations, or elsewhere in the text.

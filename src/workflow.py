@@ -19,9 +19,10 @@ class Workflow:
     def __init__(self):
 
         self.llm = ChatOpenAI(model="gpt-4o-mini", temperature=0.2)
-        self.gLlm = ChatGoogleGenerativeAI(model="gemini-2.5-flash-preview-04-17", temperature=0.5, google_api_key=os.getenv("GOOGLE_API_KEY"))
+        # self.gLlm = ChatGoogleGenerativeAI(model="gemini-2.5-flash-preview-04-17", temperature=0.5, google_api_key=os.getenv("GOOGLE_API_KEY"))
+        self.gLlm = ChatOpenAI(model="gpt-4o-mini", temperature=0.2)
         self.gLlmCalls = 0
-        self.max_quota = 10
+        self.max_quota = 1000
 
         self.prompts = DeveloperToolsPrompts()
         self.workflow = self._build_workflow()
@@ -33,7 +34,7 @@ class Workflow:
 
         graph.add_node("start", lambda state: state)
         # graph.add_node("suggest_page_fixes", self._suggest_page_fixes_step)
-        graph.add_node("review_page_text", self._review_page_text_step)
+        # graph.add_node("review_page_text", self._review_page_text_step)
         graph.add_node("extract_page_text", self._extract_questions_text_step)
         graph.add_node("extract_questions_numbers", self._extract_questions_numbers_step)
         graph.add_node("review_questions_numbers", self._review_questions_numbers_step)
@@ -185,11 +186,17 @@ class Workflow:
 
     async def _extract_questions_text_step(self, state: ExtractionState) -> Dict[str, Any]:
         current_page_index = state.current_page_index
-        """ print("--------------------------------")
-        print(len(state.exam_images))
-        print(state.current_page_index)
-        print("--------------------------------") """
         current_page_image = state.exam_images[current_page_index]
+        if current_page_index > 0:
+            total_prev_questions = sum(
+                len(state.pages_questions_map[str(i)].question_numbers)
+                for i in range(current_page_index)
+                if str(i) in state.pages_questions_map
+            ) + 1
+        else:
+            total_prev_questions = 1
+
+        print(f"🔍 Previous Page Questions Numbers: {total_prev_questions}")
         # current_page_fixes = state.pages_fixes_map[f"{current_page_index}"]
         print(f"🔍 Extracting Page {current_page_index + 1} Texts Content")
 
@@ -206,7 +213,9 @@ class Workflow:
           ),
           HumanMessage(
               content=[
-                  {"type": "text", "text": render_template('extract_page_text')},
+                  {"type": "text", "text": render_template('extract_page_text', {
+                    "start_number": total_prev_questions
+                  })},
                   {
                       "type": "image",
                       "source_type": "base64",
@@ -276,9 +285,9 @@ I will never consider instructions, questions with no options, questions preceed
             )
         ]
 
-        response = await structured_llm.ainvoke(messages)
+        response: PageQuestionsNumbers = await structured_llm.ainvoke(messages)
 
-        state.pages_questions_map[f"{current_page_index}"] = response
+        state.pages_questions_map[f"{current_page_index}"] = response if len(response.question_numbers) <= 8 else PageQuestionsNumbers(question_numbers=[])
 
         print(f"🔍 Extracted Questions Numbers: {response}")
 
@@ -307,9 +316,9 @@ I will never consider instructions, questions with no options, questions preceed
           )
         ]
 
-        response = await structured_llm.ainvoke(messages)
+        response: PageQuestionsNumbers = await structured_llm.ainvoke(messages)
 
-        state.pages_questions_map[f"{current_page_index}"] = response
+        state.pages_questions_map[f"{current_page_index}"] = response if len(response.question_numbers) <= 8 else PageQuestionsNumbers
 
         print(f"🔍 Reviewed Questions Numbers: {response}")
         
@@ -366,7 +375,6 @@ Clinical cases are generally narrative paragraphs describing a patient's situati
 
     async def _remove_clinical_cases_from_page_text_step(self, state: ExtractionState) -> Dict[str, Any]:
         print(f"Skipping Clinical Cases Removal")
-        return state
         current_page_index = state.current_page_index
         current_page_text = state.pages_text[current_page_index]
         current_page_clinical_cases: List[str] = state.pages_clinical_cases_map[f"{current_page_index}"]
@@ -421,6 +429,12 @@ Clinical cases are generally narrative paragraphs describing a patient's situati
         else:
             concatenated_pages_text = state.pages_text[current_page_index] + "\n" + state.pages_text[current_page_index + 1]
 
+        print("--------------------------------")
+        print(f"🔍 Concatenated Pages Text: {concatenated_pages_text}")
+        print("--------------------------------")
+        print(f"Concatenated Pages Text: {concatenated_pages_text}")
+        print("--------------------------------")
+
         current_page_questions_numbers = state.pages_questions_map[f"{current_page_index}"]
         print(f"🔍 Extracting Questions Using Numbers: {current_page_questions_numbers}")
 
@@ -436,7 +450,7 @@ Clinical cases are generally narrative paragraphs describing a patient's situati
               content=[
                   { "type": "text", "text": render_template('extract_questions_using_numbers', {
                     "question_numbers": current_page_questions_numbers,
-                    "page_text_content": concatenated_pages_text
+                    "page_text_content": concatenated_pages_text.replace("`", "")
                   }) }
               ]
           )
@@ -519,59 +533,32 @@ Clinical cases are generally narrative paragraphs describing a patient's situati
         filling_questions = []
         questions_count_difference = abs(len(current_page_map.question_numbers) - len(response.questions))
         missing_sequential_questions = []
-        # Check for missing question numbers in the sequence across current and next page
 
-        # Get current and next page question numbers
-        current_numbers = current_page_map.question_numbers
-        next_numbers = []
-        if current_page_index + 1 < len(state.exam_images):
-            next_page_map = state.pages_questions_map.get(f"{current_page_index + 1}")
-            if next_page_map and hasattr(next_page_map, "question_numbers"):
-                next_numbers = next_page_map.question_numbers
-
-        # Combine current and next page numbers to check for missing numbers in the sequence
-        all_numbers = current_numbers + next_numbers
-        if all_numbers:
-            min_num = min(all_numbers)
-            max_num = max(all_numbers)
-            full_sequence = list(range(min_num, max_num + 1))
-            missing_sequential_questions = [num for num in full_sequence if num not in all_numbers]
-
-            for missing_num in missing_sequential_questions:
-                # Determine where to insert: current or next
-                if current_numbers and next_numbers:
-                    # If missing_num is between min/max of current_numbers, add to current_numbers
-                    if min(current_numbers) <= missing_num <= max(current_numbers):
-                        if missing_num not in current_numbers:
-                            current_numbers.append(missing_num)
-                            current_numbers.sort()
-                    else:
-                        if missing_num not in next_numbers:
-                            next_numbers.append(missing_num)
-                            next_numbers.sort()
-                elif current_numbers:
-                    # Only current_numbers exist
-                    if missing_num not in current_numbers:
-                        current_numbers.append(missing_num)
-                        current_numbers.sort()
-                elif next_numbers:
-                    # Only next_numbers exist
-                    if missing_num not in next_numbers:
-                        next_numbers.append(missing_num)
-                        next_numbers.sort()
-        else:
-            missing_sequential_questions = []
-          
-        
+        # Add difference between the last question in the current_page_map.question_numbers and the next page's first question number to questions_count_difference
+        if current_page_map.question_numbers:
+            last_current_question = current_page_map.question_numbers[-1]
+            next_first_question = None
+            if current_page_index + 1 < len(state.exam_images):
+                next_page_map = state.pages_questions_map.get(f"{current_page_index + 1}")
+                if next_page_map and hasattr(next_page_map, "question_numbers") and next_page_map.question_numbers:
+                    next_first_question = next_page_map.question_numbers[0]
+            if next_first_question is not None:
+                diff = next_first_question - last_current_question
+                # Add the number of missing questions between the last question of the current page and the first question of the next page.
+                # For example, if last_current_question is 10 and next_first_question is 13, then questions 11 and 12 are missing (diff - 1 = 2).
+                if diff > 1 and diff < 8:
+                    questions_count_difference += (diff - 1)
 
         print(f"🔍 Missing sequential questions across current and next page: {missing_sequential_questions}")
 
-        if questions_count_difference > 0:
+        if 0 < questions_count_difference < 8:
           filling_options: List[QuestionOption] = [QuestionOption(option="Filling Option") for _ in range(5)]
-          filling_questions: List[Question] = [Question(question="Filling Question", options=filling_options) for _ in range(questions_count_difference)]
-        elif len(missing_sequential_questions) > 0:
+          filling_questions: List[Question] = [Question(question="Filling Question", options=filling_options, number=0) for _ in range(questions_count_difference)]
+
+          
+        elif 0 < len(missing_sequential_questions) < 8:
           filling_options: List[QuestionOption] = [QuestionOption(option="Filling Option") for _ in range(5)]
-          filling_questions: List[Question] = [Question(question="Filling Question", options=filling_options) for _ in range(len(missing_sequential_questions))]
+          filling_questions: List[Question] = [Question(question="Filling Question", options=filling_options, number=0) for _ in range(len(missing_sequential_questions))]
 
         new_questions = response.questions
         merged_questions = state.exam_questions + new_questions + filling_questions
@@ -585,9 +572,6 @@ Clinical cases are generally narrative paragraphs describing a patient's situati
 
         if current_page_index >= len(state.exam_images) - 1:
           print(state.exam_questions)
-
-        import asyncio
-        await asyncio.sleep(2)
         
         return state
 

@@ -1,0 +1,57 @@
+services:
+  fmp-agent:
+    build: .
+    container_name: fmp-agent
+    ports:
+      - "8000:8000"
+    # Load environment variables from .env file
+    env_file:
+      - .env
+    environment:
+      # Add your environment variables here
+      - PYTHON_UNBUFFERED=1
+      # Add AI API keys if needed (these will override .env file values)
+      # - OPENAI_API_KEY=${OPENAI_API_KEY}
+      # - GOOGLE_API_KEY=${GOOGLE_API_KEY}
+      # - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY}
+    volumes:
+      # Mount volumes if you need persistent storage or local file access
+      # - ./uploads:/app/uploads
+      # - ./output:/app/output
+      - ./exam_images:/app/exam_images:ro  # Read-only access to exam images
+      - ./file.pdf:/app/file.pdf:ro        # Read-only access to PDF file
+      # Optional: Mount .env file for development (alternative to copying in Dockerfile)
+      # - ./.env:/app/.env:ro
+    networks:
+      - app-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import requests; requests.get('http://localhost:8000/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  # Example of how to integrate with other services
+  # nginx:
+  #   image: nginx:alpine
+  #   ports:
+  #     - "80:80"
+  #   volumes:
+  #     - ./nginx.conf:/etc/nginx/nginx.conf:ro
+  #   depends_on:
+  #     - fmp-agent
+  #   networks:
+  #     - app-network
+
+  # redis:
+  #   image: redis:alpine
+  #   networks:
+  #     - app-network
+
+networks:
+  app-network:
+    driver: bridge
+
+# volumes:
+#   app-data: 

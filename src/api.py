@@ -1,10 +1,11 @@
 import tempfile
 import os
 import traceback
+import base64
 from typing import List, Dict, Any
-from fastapi import FastAPI, File, UploadFile, HTTPException
+from fastapi import FastAPI, HTTPException, Body
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from .workflow import Workflow
 from .models import PageClinicalCase, PageQuestionsNumbers, Question, ExtractionState
@@ -25,8 +26,8 @@ class QuestionResponse(BaseModel):
 
 
 class ClinicalCaseResponse(BaseModel):
-    questions: List[int] = []
-    text: str
+    question_numbers: List[int] = []
+    clinical_case: str
     type: str = "clinicalCase"
     images: List[str] = []
 
@@ -36,7 +37,12 @@ class ExtractionResponse(BaseModel):
     clinical_cases: List[ClinicalCaseResponse]
     questions: List[QuestionResponse]
     pages_questions_map: Dict[str, PageQuestionsNumbers]
+    page_numbers: List[List[int]]
     message: str = ""
+
+
+class Base64FileRequest(BaseModel):
+    base64: str = Field(..., description="Base64 encoded PDF file data")
 
 
 app = FastAPI(
@@ -48,41 +54,44 @@ app = FastAPI(
 
 @app.post("/extract-questions", response_model=ExtractionResponse)
 async def extract_questions_from_pdf(
-    file: UploadFile = File(..., description="PDF file containing exam questions")
+    request: Base64FileRequest = Body(..., description="Base64 encoded PDF file data")
 ) -> ExtractionResponse:
     """
     Extract multiple choice questions from a PDF file.
     
-    The API will:
-    1. Accept a PDF file upload
+    The API accepts base64 encoded PDF data and will:
+    1. Decode the base64 PDF data
     2. Convert PDF pages to images
     3. Use AI to extract questions and options
     4. Return structured JSON with all questions
     
     Args:
-        file: PDF file to process
+        request: Base64 encoded PDF data (JSON body)
         
     Returns:
         ExtractionResponse: Structured response with extracted questions
     """
     
-    # Validate file type
-    if not file.filename.lower().endswith('.pdf'):
+    filename = "document.pdf"  # Default filename for base64 uploads
+    
+    try:
+        # Decode base64 data
+        file_data = base64.b64decode(request.base64)
+    except Exception as e:
         raise HTTPException(
-            status_code=400, 
-            detail="File must be a PDF (.pdf extension required)"
+            status_code=400,
+            detail=f"Invalid base64 data: {str(e)}"
         )
     
-    # Create temporary file to store the uploaded PDF
+    # Create temporary file to store the PDF data
     temp_file_path = None
     try:
         # Create temporary file
         with tempfile.NamedTemporaryFile(delete=False, suffix='.pdf') as temp_file:
             temp_file_path = temp_file.name
             
-            # Write uploaded file content to temporary file
-            content = await file.read()
-            temp_file.write(content)
+            # Write file data to temporary file
+            temp_file.write(file_data)
             temp_file.flush()
         
         # Process the PDF through the workflow
@@ -104,22 +113,24 @@ async def extract_questions_from_pdf(
 
         clinical_cases_response: List[ClinicalCaseResponse] = []
         for page_index, clinical_cases in final_state.pages_clinical_cases_map.items():
-            # Get the first question number for this page, if available
+            
             if len(final_state.pages_questions_map[f"{page_index}"].question_numbers) > 0:
                 first_question_number = final_state.pages_questions_map[f"{page_index}"].question_numbers[0]
             else:
                 first_question_number = None
             for clinical_case_text in clinical_cases:
                 cc_resp = ClinicalCaseResponse(
-                    questions=[first_question_number - 1 if first_question_number is not None else 0],
-                    text=clinical_case_text,
+                    question_numbers=[first_question_number if first_question_number is not None else 0],
+                    clinical_case=clinical_case_text,
                     type="clinicalCase",
                     images=[],
                 )
-                # Optionally, you can add the first_question_number as an attribute if your model supports it
-                # cc_resp.first_question_number = first_question_number
+
                 clinical_cases_response.append(cc_resp)
 
+        final_page_numbers = []
+        for page_index, page_numbers in final_state.pages_questions_map.items():
+            final_page_numbers.append(list(map(lambda x: x - 1, page_numbers.question_numbers)))
 
         # Remove the temporary file after finishing the extraction
         if temp_file_path and os.path.exists(temp_file_path):
@@ -134,7 +145,8 @@ async def extract_questions_from_pdf(
             questions=questions_response,
             clinical_cases=clinical_cases_response,
             pages_questions_map=final_state.pages_questions_map,
-            message=f"Successfully extracted {len(questions_response)} questions from {file.filename}"
+            page_numbers=final_page_numbers,
+            message=f"Successfully extracted {len(questions_response)} questions from {filename}"
         )
         
     except Exception as e:
@@ -167,7 +179,7 @@ async def root():
         "message": "PDF Question Extractor API",
         "version": "1.0.0",
         "endpoints": {
-            "POST /extract-questions": "Extract questions from PDF file",
+            "POST /extract-questions": "Extract questions from PDF file (base64 only)",
             "GET /health": "Health check",
             "GET /docs": "API documentation"
         }
