@@ -1,4 +1,5 @@
 import asyncio
+import base64
 import os
 from typing import Dict, Any, List
 from langgraph.graph import StateGraph, END
@@ -33,9 +34,14 @@ class GeminiWorkflow:
         # ==================== Nodes Setup ====================
 
         graph.add_node("start", lambda state: state)
+        graph.add_node("load_document", self._load_document_step)
+        # graph.add_node("advance_page", lambda state: state)
         # graph.add_node("suggest_page_fixes", self._suggest_page_fixes_step)
         # graph.add_node("review_page_text", self._review_page_text_step)
         graph.add_node("extract_document_text", self._extract_document_text_step)
+        graph.add_node("review_document_text", self._review_document_text_step)
+        graph.add_node("questions_markdown_formatter", self._questions_markdown_formatter_step)
+
         graph.add_node("extract_document_pages_data", self._extract_document_pages_data_step)
         graph.add_node("extract_document_clinical_case", self._extract_document_clinical_case_step)
         graph.add_node("finish", lambda state: state)
@@ -46,16 +52,57 @@ class GeminiWorkflow:
 
         # graph.add_edge("start", "suggest_page_fixes")
         # graph.add_edge("suggest_page_fixes", "extract_page_text")
-        graph.add_edge("start", "extract_document_text")
-        graph.add_edge("extract_document_text", "extract_document_pages_data")
-        graph.add_edge("extract_document_pages_data", "extract_document_clinical_case")
+        """ graph.add_edge("start", "load_document")
+        graph.add_edge("load_document", "extract_document_pages_data") """
+
+        graph.add_edge("start", "extract_document_pages_data")
+        graph.add_edge("extract_document_pages_data", "extract_document_text")
+        # graph.add_conditional_edges("extract_document_text", self._extract_document_text_conditional_edges)
+        graph.add_edge("extract_document_text", "review_document_text")
+        graph.add_edge("review_document_text", "questions_markdown_formatter")
+        graph.add_edge("questions_markdown_formatter", "extract_document_clinical_case")
 
         graph.add_edge("extract_document_clinical_case", "finish")
         graph.add_edge("finish", END)
 
         return graph.compile()
 
+    async def _load_document_step(self, state: DocumentExtractionState) -> DocumentExtractionState:
+      print(f"🔍 Loading Document")
+
+      from langchain_docling import DoclingLoader
+      import tempfile
+      import os
+
+      for i, img in enumerate(state.exam_images):
+        # Create a temporary file for the image
+        print(f"🔍 Loading Document Image {i + 1}")
+        with tempfile.NamedTemporaryFile(delete=False, suffix='.jpg') as temp_img_file:
+            temp_img_path = temp_img_file.name
+            temp_img_file.write(base64.b64decode(img))
+
+        try:
+            loader = DoclingLoader(
+                file_path=temp_img_path
+            )
+            docs = loader.load()
+
+            print(f"🔍 Loaded Document")
+            contents = [doc.page_content for doc in docs]
+
+            print(f"🔍 Contents")
+            state.document_contents.append("\n".join(contents))
+
+        finally:
+            # Unlink (delete) the temporary file after use
+            if os.path.exists(temp_img_path):
+                os.unlink(temp_img_path)
+
+      return state
+
     async def _extract_document_text_step(self, state: DocumentExtractionState) -> DocumentExtractionState:
+      #current_page_index = state.current_page_index
+      #print(f"🔍 Extracting Document Text for Document Page {current_page_index}")
       print(f"🔍 Extracting Document Text for Document")
 
       # Use the extract_document_text.j2 template for the prompt
@@ -87,16 +134,114 @@ class GeminiWorkflow:
           )
       ]
 
-      structured_llm = self.gLlm.with_structured_output(PageQuestions)
-      response: PageQuestions = await structured_llm.ainvoke(messages)
+      """ structured_llm = self.gLlm.with_structured_output(PageQuestions)
+      response: PageQuestions = await structured_llm.ainvoke(messages) """
+      response = self.gLlm.invoke(messages)
       print(f"🔍 Extracted Document Text for Page")
       print(response)
 
       await self.handle_quota()
 
+      state.questions_raw_text = response.content
+
+      return state
+
+    async def _review_document_text_step(self, state: DocumentExtractionState) -> DocumentExtractionState:
+      #current_page_index = state.current_page_index
+      #print(f"🔍 Extracting Document Text for Document Page {current_page_index}")
+      print(f"🔍 Extracting Document Text for Document")
+
+      # Use the extract_document_text.j2 template for the prompt
+      messages = [
+          HumanMessage(
+              content=[
+                  {
+                      "type": "text",
+                      "text": render_template('document_extraction_reviewer', {
+                        "initial_extraction": state.questions_raw_text
+                      })
+                  },
+                  *[
+                      {
+                          "type": "image",
+                          "source_type": "base64",
+                          "data": img,
+                          "mime_type": "image/jpeg",
+                      }
+                      for img in state.exam_images
+                  ],
+              ]
+          )
+      ]
+
+      """ structured_llm = self.gLlm.with_structured_output(PageQuestions)
+      response: PageQuestions = await structured_llm.ainvoke(messages) """
+      response = self.gLlm.invoke(messages)
+      print(f"🔍 Extracted Document Text for Page")
+      print(response)
+
+      await self.handle_quota()
+
+      state.questions_raw_text = response.content
+
+      return state
+
+    async def _questions_markdown_formatter_step(self, state: DocumentExtractionState) -> DocumentExtractionState:
+      print(f"🔍 Formatting Questions Markdown")
+
+      messages = [
+          HumanMessage(
+              content=[
+                  {
+                      "type": "text",
+                      "text": render_template('questions_markdown_formatter', {
+                        "raw_text": state.questions_raw_text
+                      })
+                  }
+              ]
+          )
+      ]
+
+      response = self.gLlm.invoke(messages)
+      print(f"🔍 Formatted Questions Markdown")
+      print(response)
+
+      await self.handle_quota()
+
+      state.questions_markdown_text = response.content
+
+      print(f"🔍 Questions Markdown Text")
+      print(state.questions_markdown_text)
+
+      structured_llm = self.gLlm.with_structured_output(PageQuestions)
+      response: PageQuestions = await structured_llm.ainvoke([
+        SystemMessage(
+          content=[
+            {
+              "type": "text",
+              "text": "You are an expert parsing agent. Your task is to accurately parse the user's text, which is a markdown representation of an exam, and extract all the questions into the provided 'PageQuestions' schema. Pay close attention to question numbers, the full question text, and all associated options. questions are delimited by a line containing only '---' before and after the question, and the question number is the first number in the question text, and the options are preceded by a letter and a period, the number of options is the number of letter preceeding it."
+            }
+          ]
+        ),
+        HumanMessage(
+          content=[
+            {
+              "type": "text",
+              "text": state.questions_markdown_text
+            }
+          ]
+        )
+      ])
+
       state.questions = response.questions
 
       return state
+
+    async def _extract_document_text_conditional_edges(self, state: DocumentExtractionState) -> str:
+      if state.current_page_index < len(state.exam_images):
+        return "extract_document_text"
+      else:
+        return "extract_document_clinical_case"
 
     async def _extract_document_pages_data_step(self, state: DocumentExtractionState) -> DocumentExtractionState:
       print(f"🔍 Extracting Document Pages Data")
@@ -160,7 +305,9 @@ class GeminiWorkflow:
               content=[
                   {
                       "type": "text",
-                      "text": render_template('extract_document_clinical_case')
+                      "text": render_template('extract_document_clinical_case', {
+                        "questions_markdown_text": state.questions_markdown_text
+                      })
                   },
                   *[
                     {
@@ -230,6 +377,7 @@ class GeminiWorkflow:
         initial_state = DocumentExtractionState()
         # Only use page 5 (index 4) from exam_images
         initial_state.exam_images = exam_images
+        initial_state.pdf_path = pdf_path
         final_state = await self.workflow.ainvoke(initial_state, {
             "recursion_limit": 120
         })

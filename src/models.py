@@ -23,11 +23,11 @@ class ClinicalCaseResponse(BaseModel):
     images: List[str] = []
 
 class QuestionOption(BaseModel):
-    option: str
+    option: str = Field(description="The option text, it should be a preceeded by a letter followed by a hyphen, and the option text ands before the beginning of the next question prefix")
 
 class Question(BaseModel):
-    question: str = Field(description="The question text, it should be a question, not a clinical case")
-    options: List[QuestionOption] = Field(description="The list of options for the question usually in alphabetical order")
+    question: str = Field(description="The full text of the question itself, as it is with no alterations, excluding the number.")
+    options: List[QuestionOption] = Field(description="A list of all possible options for the question, as they are in the text, excluding the prefix letter.")
     number: int = Field(description="The question number preceeding the question text")
 
 class PageQuestionsNumbers(BaseModel):
@@ -108,10 +108,17 @@ class DocumentClinicalCaseOutput(BaseModel):
 
 class DocumentExtractionState(BaseModel):
 
+    document_contents: List[str] = []
+
+    pdf_path: str = ""
+    current_page_index: int = 0
+
     exam_images: List[str] = []
 
     pages_data: PageDataOutput = PageDataOutput(data=[])
     questions: List[Question] = []
+    questions_raw_text: str = ""
+    questions_markdown_text: str = ""
 
     pages_clinical_cases: List[ClinicalCaseResponse] = []
     output_clinical_cases: List[ClinicalCaseResponse] = []
