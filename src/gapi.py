@@ -103,14 +103,22 @@ async def extract_questions_from_pdf(
             questions_response.append(question_response)
 
         page_numbers: List[List[int]] = []
+        cumulative_questions = 0
+        
         for page_index, page_data_item in enumerate(final_state.pages_data.data):
-            questions_sequence = list(range(page_data_item.start_question_number - 1, page_data_item.end_question_number))
-
-            if page_data_item.is_instructions_page or page_data_item.is_corrections_table_page or len(questions_sequence) > 9 or questions_sequence[0] < 0 :
-              page_numbers.append([])
-
+            print("--------------------------------")
+            print(page_data_item)
+            print("--------------------------------")
+            if page_data_item.is_instructions_page or page_data_item.is_corrections_table_page or page_data_item.questions_count > 13 or page_data_item.questions_count < 0:
+                page_numbers.append([])
             else:
-              page_numbers.append(questions_sequence)
+                # Calculate the range of question indices for this page
+                start_index = cumulative_questions
+                end_index = cumulative_questions + page_data_item.questions_count
+                page_numbers.append(list(range(start_index, end_index)))
+                
+                # Update cumulative count for next page
+                cumulative_questions += page_data_item.questions_count
 
 
         pages_questions_map: Dict[str, PageQuestionsNumbers] = {}

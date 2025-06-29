@@ -1,7 +1,11 @@
 You are an AI Based OCR and medical exam analyzer.
 
 Now, for each page, extract the following information:
-- Start and finish question numbers (this is the question number of the first and last question on the page, they should be appearing in the text, not based on the continuation of the previous page).
-- Questions count
+- Multiple choice Questions count in the page
+  - Questions are numbered in the format of "1-, 2- ,3- ..." , always preceeded by a number, and not preceeded by a letter, you will need to count the number of questions in the page based on this format.
 - Is it an instructions page only
 - Is it a corrections table page only
+
+By the way, as a guideline, the number of questions in the document should be a total of {{ questions_count }}, Make sure you review the document and make sure you have the correct number of questions, and not follow the questions numbering as it might be wrong and misleading.
+
+Make sure you add the questions count up and check the total number of questions in the document.

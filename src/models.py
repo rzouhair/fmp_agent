@@ -89,8 +89,6 @@ class ExtractionResponse(BaseModel):
 
 
 class PageData(BaseModel):
-    start_question_number: int
-    end_question_number: int
     questions_count: int
     is_instructions_page: bool
     is_corrections_table_page: bool

@@ -55,12 +55,13 @@ class GeminiWorkflow:
         """ graph.add_edge("start", "load_document")
         graph.add_edge("load_document", "extract_document_pages_data") """
 
-        graph.add_edge("start", "extract_document_pages_data")
-        graph.add_edge("extract_document_pages_data", "extract_document_text")
+        graph.add_edge("start", "extract_document_text")
+        # graph.add_edge("extract_document_pages_data", "extract_document_text")
         # graph.add_conditional_edges("extract_document_text", self._extract_document_text_conditional_edges)
         graph.add_edge("extract_document_text", "review_document_text")
         graph.add_edge("review_document_text", "questions_markdown_formatter")
-        graph.add_edge("questions_markdown_formatter", "extract_document_clinical_case")
+        graph.add_edge("questions_markdown_formatter", "extract_document_pages_data")
+        graph.add_edge("extract_document_pages_data", "extract_document_clinical_case")
 
         graph.add_edge("extract_document_clinical_case", "finish")
         graph.add_edge("finish", END)
@@ -262,7 +263,9 @@ class GeminiWorkflow:
               content=[
                   {
                       "type": "text",
-                      "text": render_template('extract_document_pages_data')
+                      "text": render_template('extract_document_pages_data', {
+                         "questions_count": len(state.questions)
+                      })
                   },
                   *[
                       {
