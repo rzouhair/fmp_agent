@@ -28,7 +28,7 @@ def extract_pdf_pages_as_images(pdf_path: str, dpi: int = 200) -> List[str]:
         raise FileNotFoundError(f"PDF file not found: {pdf_path}")
 
     try:
-        # Convert PDF pages to images
+        # Convert PDF pages to images at the given DPI
         images = convert_from_path(
             pdf_path,
             dpi=dpi,
@@ -36,11 +36,17 @@ def extract_pdf_pages_as_images(pdf_path: str, dpi: int = 200) -> List[str]:
             thread_count=1
         )
 
-        # Convert each image to base64-encoded PNG
+        # Upscale each image to a larger resolution (e.g., 2x the original size)
+        upscale_factor = 2  # You can adjust this factor as needed
         base64_images = []
-        for img in images:
+        for idx, img in enumerate(images):
+            orig_width, orig_height = img.width, img.height
+            new_width, new_height = orig_width * upscale_factor, orig_height * upscale_factor
+            img_upscaled = img.resize((new_width, new_height), resample=Image.LANCZOS)
+            print(f"Page {idx+1} original resolution: {orig_width}x{orig_height} -> upscaled to: {new_width}x{new_height} pixels")
+
             with io.BytesIO() as output:
-                img.save(output, format='PNG')
+                img_upscaled.save(output, format='PNG')
                 base64_str = base64.b64encode(output.getvalue()).decode('utf-8')
                 base64_images.append(base64_str)
 
