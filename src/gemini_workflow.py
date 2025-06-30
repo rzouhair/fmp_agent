@@ -10,7 +10,7 @@ from dotenv import load_dotenv
 from src.api import ClinicalCaseResponse
 from src.utils.agent import render_template
 from src.utils.pdf import extract_pdf_pages_as_images
-from .models import DocumentClinicalCaseOutput, DocumentExtractionState, PageDataOutput, PageQuestions
+from .models import DocumentClinicalCaseOutput, DocumentExtractionState, PageData, PageDataOutput, PageQuestions
 from .prompts import DeveloperToolsPrompts
 
 load_dotenv()
@@ -107,47 +107,49 @@ class GeminiWorkflow:
       print(f"🔍 Extracting Document Text for Document")
 
       # Use the extract_document_text.j2 template for the prompt
-      messages = [
-          SystemMessage(
-              content=[
-                  {
-                      "type": "text",
-                      "text": "You are a helpful assistant that extracts the text from the image of the exam page. You only return the response, not confirmation, no greetings, no explanations, no nothing. Just the final result based on user's request."
-                  }
-              ]
-          ),
-          HumanMessage(
-              content=[
-                  {
-                      "type": "text",
-                      "text": render_template('extract_document_text')
-                  },
-                  *[
+      if len(state.exam_images) > 0:
+        for i, img in enumerate(state.exam_images):
+          print(f"🔍 Extracting Document Text for Document Page {i + 1}")
+
+          messages = [
+              SystemMessage(
+                  content=[
+                      {
+                          "type": "text",
+                          "text": "You are a helpful assistant that extracts the text from the image of the exam page. You only return the response, not confirmation, no greetings, no explanations, no nothing. Just the final result based on user's request."
+                      }
+                  ]
+              ),
+              HumanMessage(
+                  content=[
+                      {
+                          "type": "text",
+                          "text": render_template('extract_document_text')
+                      },
                       {
                           "type": "image",
                           "source_type": "base64",
                           "data": img,
                           "mime_type": "image/jpeg",
                       }
-                      for img in state.exam_images
-                  ],
-              ]
-          )
-      ]
+                  ]
+              )
+          ]
 
-      """ structured_llm = self.gLlm.with_structured_output(PageQuestions)
-      response: PageQuestions = await structured_llm.ainvoke(messages) """
-      response = self.gLlm.invoke(messages)
-      print(f"🔍 Extracted Document Text for Page")
-      print(response)
+          """ structured_llm = self.gLlm.with_structured_output(PageQuestions)
+          response: PageQuestions = await structured_llm.ainvoke(messages) """
+          response = self.gLlm.invoke(messages)
+          await self.handle_quota()
 
-      await self.handle_quota()
+          state.questions_raw_text_list.append(response.content)
 
-      state.questions_raw_text = response.content
+      state.questions_raw_text = "\n".join(state.questions_raw_text_list)
 
       return state
 
     async def _review_document_text_step(self, state: DocumentExtractionState) -> DocumentExtractionState:
+      return state
+
       #current_page_index = state.current_page_index
       #print(f"🔍 Extracting Document Text for Document Page {current_page_index}")
       print(f"🔍 Extracting Document Text for Document")
@@ -189,27 +191,58 @@ class GeminiWorkflow:
 
     async def _questions_markdown_formatter_step(self, state: DocumentExtractionState) -> DocumentExtractionState:
       print(f"🔍 Formatting Questions Markdown")
+      print("================================================")
+      print(len(state.questions_raw_text_list))
+      print(state.questions_raw_text_list)
+      print("================================================")
 
-      messages = [
-          HumanMessage(
-              content=[
-                  {
-                      "type": "text",
-                      "text": render_template('questions_markdown_formatter', {
-                        "raw_text": state.questions_raw_text
-                      })
-                  }
-              ]
-          )
-      ]
+      for i, raw_text in enumerate(state.questions_raw_text_list):
+        print(f"🔍 Formatting Questions Markdown for Page {i + 1}")
 
-      response = self.gLlm.invoke(messages)
-      print(f"🔍 Formatted Questions Markdown")
-      print(response)
+        messages = [
+            HumanMessage(
+                content=[
+                    {
+                        "type": "text",
+                        "text": render_template('questions_markdown_formatter', {
+                          "raw_text": raw_text
+                        })
+                    }
+                ]
+            )
+        ]
 
-      await self.handle_quota()
+        response = self.gLlm.invoke(messages)
+        print(f"🔍 Formatted Questions Markdown")
+        print(response.content)
 
-      state.questions_markdown_text = response.content
+        # Use the QuestionRegex to extract all questions from the raw text
+        import re
+        question_regex = re.compile(
+            r"[0-9]{1,2}(\s*)(\.|\/|-|_|\)|\\|,)((.|\n)*?)\n*A([^\w\'\u00C0-\u02AF\s])",
+            re.DOTALL | re.MULTILINE
+        )
+
+        questions_matches = question_regex.findall(response.content)
+
+        # Each match is a tuple; the third group (index 2) is the question body
+        # Optionally, you can reconstruct the full matched string if needed:
+        all_questions = [m[0] + m[1] + m[2] for m in questions_matches]
+
+        print("================================================")
+        print(f"🔍 Extracted Questions using QuestionRegex:")
+        print(f"Found {len(all_questions)} questions")
+        print("================================================")
+
+        state.pages_data.data.append(PageData(
+          questions_count=len(all_questions),
+          is_instructions_page=False,
+          is_corrections_table_page=False
+        ))
+
+        await self.handle_quota()
+
+        state.questions_markdown_text += "\n" + response.content
 
       print(f"🔍 Questions Markdown Text")
       print(state.questions_markdown_text)
@@ -228,7 +261,7 @@ class GeminiWorkflow:
           content=[
             {
               "type": "text",
-              "text": state.questions_markdown_text
+              "text": state.questions_markdown_text.replace('---', '\n')
             }
           ]
         )
@@ -245,6 +278,9 @@ class GeminiWorkflow:
         return "extract_document_clinical_case"
 
     async def _extract_document_pages_data_step(self, state: DocumentExtractionState) -> DocumentExtractionState:
+
+      return state
+
       print(f"🔍 Extracting Document Pages Data")
 
       structured_llm = self.gLlm.with_structured_output(PageDataOutput)
@@ -294,6 +330,13 @@ class GeminiWorkflow:
 
       structured_llm = self.gLlm.with_structured_output(DocumentClinicalCaseOutput)
 
+      formatted_questions = []
+      for i, question in enumerate(state.questions):
+        question_text = f"{i + 1}- {question.question}\n"
+        for idx, option in enumerate(question.options):
+          question_text += f"{chr(65 + idx)}- {option.option}\n"
+        formatted_questions.append(question_text)
+
       # Use the extract_document_text.j2 template for the prompt
       messages = [
           SystemMessage(
@@ -309,7 +352,7 @@ class GeminiWorkflow:
                   {
                       "type": "text",
                       "text": render_template('extract_document_clinical_case', {
-                        "questions_markdown_text": state.questions_markdown_text
+                        "questions_markdown_text": "---".join(formatted_questions)
                       })
                   },
                   *[

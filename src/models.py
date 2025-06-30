@@ -115,6 +115,7 @@ class DocumentExtractionState(BaseModel):
 
     pages_data: PageDataOutput = PageDataOutput(data=[])
     questions: List[Question] = []
+    questions_raw_text_list: List[str] = []
     questions_raw_text: str = ""
     questions_markdown_text: str = ""
 
