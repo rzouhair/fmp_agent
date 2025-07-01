@@ -1,431 +1,84 @@
-import asyncio
 import base64
 import os
-from typing import Dict, Any, List
-from langgraph.graph import StateGraph, END
-from langchain_google_genai import ChatGoogleGenerativeAI
-from langchain_core.messages import HumanMessage, SystemMessage
-from dotenv import load_dotenv
+from jinja2 import Environment, FileSystemLoader
 
-from src.api import ClinicalCaseResponse
-from src.utils.agent import render_template
-from src.utils.pdf import extract_pdf_pages_as_images
-from .models import DocumentClinicalCaseOutput, DocumentExtractionState, PageData, PageDataOutput, PageQuestions
-from .prompts import DeveloperToolsPrompts
+from dotenv import load_dotenv
+from langchain_core.messages import HumanMessage
+from langchain_google_genai import ChatGoogleGenerativeAI
+
+from src.models import Document
+
+# Set up the Jinja2 environment to load templates from the 'templates' directory
+template_dir = os.path.join(os.path.dirname(__file__), "templates")
+env = Environment(loader=FileSystemLoader(template_dir))
+
+
+def _load_prompt(template_name: str) -> str:
+    """Loads a prompt from a Jinja2 template."""
+    return env.get_template(f"{template_name}.j2").render()
+
+
+# Load the prompt content from the template file
+EXTRACT_ALL_FROM_DOCUMENT_PROMPT = _load_prompt("extract_all_from_document")
+
 
 load_dotenv()
 
 
 class GeminiWorkflow:
     def __init__(self):
-
-        # self.llm = ChatOpenAI(model="gpt-4o-mini", temperature=0.2)
-        self.llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash-preview-04-17", temperature=0.5, google_api_key=os.getenv("GOOGLE_API_KEY"))
-        self.gLlm = self.llm
-        self.gLlmCalls = 0
-        self.max_quota = 10
-
-        self.prompts = DeveloperToolsPrompts()
-        self.workflow = self._build_workflow()
-
-    def _build_workflow(self):
-        graph = StateGraph(DocumentExtractionState)
-
-        # ==================== Nodes Setup ====================
-
-        graph.add_node("start", lambda state: state)
-        graph.add_node("load_document", self._load_document_step)
-        # graph.add_node("advance_page", lambda state: state)
-        # graph.add_node("suggest_page_fixes", self._suggest_page_fixes_step)
-        # graph.add_node("review_page_text", self._review_page_text_step)
-        graph.add_node("extract_document_text", self._extract_document_text_step)
-        graph.add_node("review_document_text", self._review_document_text_step)
-        graph.add_node("questions_markdown_formatter", self._questions_markdown_formatter_step)
-
-        graph.add_node("extract_document_pages_data", self._extract_document_pages_data_step)
-        graph.add_node("extract_document_clinical_case", self._extract_document_clinical_case_step)
-        graph.add_node("finish", lambda state: state)
-
-        # ==================== Edges Setup ====================
-
-        graph.set_entry_point("start")
-
-        # graph.add_edge("start", "suggest_page_fixes")
-        # graph.add_edge("suggest_page_fixes", "extract_page_text")
-        """ graph.add_edge("start", "load_document")
-        graph.add_edge("load_document", "extract_document_pages_data") """
-
-        graph.add_edge("start", "extract_document_text")
-        # graph.add_edge("extract_document_pages_data", "extract_document_text")
-        # graph.add_conditional_edges("extract_document_text", self._extract_document_text_conditional_edges)
-        graph.add_edge("extract_document_text", "review_document_text")
-        graph.add_edge("review_document_text", "questions_markdown_formatter")
-        graph.add_edge("questions_markdown_formatter", "extract_document_pages_data")
-        graph.add_edge("extract_document_pages_data", "extract_document_clinical_case")
-
-        graph.add_edge("extract_document_clinical_case", "finish")
-        graph.add_edge("finish", END)
-
-        return graph.compile()
-
-    async def _load_document_step(self, state: DocumentExtractionState) -> DocumentExtractionState:
-      print(f"🔍 Loading Document")
-
-      from langchain_docling import DoclingLoader
-      import tempfile
-      import os
-
-      for i, img in enumerate(state.exam_images):
-        # Create a temporary file for the image
-        print(f"🔍 Loading Document Image {i + 1}")
-        with tempfile.NamedTemporaryFile(delete=False, suffix='.jpg') as temp_img_file:
-            temp_img_path = temp_img_file.name
-            temp_img_file.write(base64.b64decode(img))
-
-        try:
-            loader = DoclingLoader(
-                file_path=temp_img_path
-            )
-            docs = loader.load()
-
-            print(f"🔍 Loaded Document")
-            contents = [doc.page_content for doc in docs]
-
-            print(f"🔍 Contents")
-            state.document_contents.append("\n".join(contents))
-
-        finally:
-            # Unlink (delete) the temporary file after use
-            if os.path.exists(temp_img_path):
-                os.unlink(temp_img_path)
-
-      return state
-
-    async def _extract_document_text_step(self, state: DocumentExtractionState) -> DocumentExtractionState:
-      #current_page_index = state.current_page_index
-      #print(f"🔍 Extracting Document Text for Document Page {current_page_index}")
-      print(f"🔍 Extracting Document Text for Document")
-
-      # Use the extract_document_text.j2 template for the prompt
-      if len(state.exam_images) > 0:
-        for i, img in enumerate(state.exam_images):
-          print(f"🔍 Extracting Document Text for Document Page {i + 1}")
-
-          messages = [
-              SystemMessage(
-                  content=[
-                      {
-                          "type": "text",
-                          "text": "You are a helpful assistant that extracts the text from the image of the exam page. You only return the response, not confirmation, no greetings, no explanations, no nothing. Just the final result based on user's request."
-                      }
-                  ]
-              ),
-              HumanMessage(
-                  content=[
-                      {
-                          "type": "text",
-                          "text": render_template('extract_document_text')
-                      },
-                      {
-                          "type": "image",
-                          "source_type": "base64",
-                          "data": img,
-                          "mime_type": "image/jpeg",
-                      }
-                  ]
-              )
-          ]
-
-          """ structured_llm = self.gLlm.with_structured_output(PageQuestions)
-          response: PageQuestions = await structured_llm.ainvoke(messages) """
-          response = self.gLlm.invoke(messages)
-          await self.handle_quota()
-
-          state.questions_raw_text_list.append(response.content)
-
-      state.questions_raw_text = "\n".join(state.questions_raw_text_list)
-
-      return state
-
-    async def _review_document_text_step(self, state: DocumentExtractionState) -> DocumentExtractionState:
-      return state
-
-      #current_page_index = state.current_page_index
-      #print(f"🔍 Extracting Document Text for Document Page {current_page_index}")
-      print(f"🔍 Extracting Document Text for Document")
-
-      # Use the extract_document_text.j2 template for the prompt
-      messages = [
-          HumanMessage(
-              content=[
-                  {
-                      "type": "text",
-                      "text": render_template('document_extraction_reviewer', {
-                        "initial_extraction": state.questions_raw_text
-                      })
-                  },
-                  *[
-                      {
-                          "type": "image",
-                          "source_type": "base64",
-                          "data": img,
-                          "mime_type": "image/jpeg",
-                      }
-                      for img in state.exam_images
-                  ],
-              ]
-          )
-      ]
-
-      """ structured_llm = self.gLlm.with_structured_output(PageQuestions)
-      response: PageQuestions = await structured_llm.ainvoke(messages) """
-      response = self.gLlm.invoke(messages)
-      print(f"🔍 Extracted Document Text for Page")
-      print(response)
-
-      await self.handle_quota()
-
-      state.questions_raw_text = response.content
-
-      return state
-
-    async def _questions_markdown_formatter_step(self, state: DocumentExtractionState) -> DocumentExtractionState:
-      print(f"🔍 Formatting Questions Markdown")
-      print("================================================")
-      print(len(state.questions_raw_text_list))
-      print(state.questions_raw_text_list)
-      print("================================================")
-
-      for i, raw_text in enumerate(state.questions_raw_text_list):
-        print(f"🔍 Formatting Questions Markdown for Page {i + 1}")
-
-        messages = [
-            HumanMessage(
-                content=[
-                    {
-                        "type": "text",
-                        "text": render_template('questions_markdown_formatter', {
-                          "raw_text": raw_text
-                        })
-                    }
-                ]
-            )
-        ]
-
-        response = self.gLlm.invoke(messages)
-        print(f"🔍 Formatted Questions Markdown")
-        print(response.content)
-
-        # Use the QuestionRegex to extract all questions from the raw text
-        import re
-        question_regex = re.compile(
-            r"[0-9]{1,2}(\s*)(\.|\/|-|_|\)|\\|,)((.|\n)*?)\n*A([^\w\'\u00C0-\u02AF\s])",
-            re.DOTALL | re.MULTILINE
+        self._model = ChatGoogleGenerativeAI(
+            model="gemini-2.5-pro",
+            temperature=0,
+            google_api_key=os.getenv("GOOGLE_API_KEY"),
+            # The `with_structured_output` method handles JSON formatting,
+            # so `response_mime_type` is not needed here and causes a conflict.
+        )
+        # This forces the model to not only output JSON but to conform to the Pydantic schema of the Document class.
+        self._structured_model = self._model.with_structured_output(
+            schema=Document,
+            include_raw=False,
         )
 
-        questions_matches = question_regex.findall(response.content)
-
-        # Each match is a tuple; the third group (index 2) is the question body
-        # Optionally, you can reconstruct the full matched string if needed:
-        all_questions = [m[0] + m[1] + m[2] for m in questions_matches]
-
-        print("================================================")
-        print(f"🔍 Extracted Questions using QuestionRegex:")
-        print(f"Found {len(all_questions)} questions")
-        print("================================================")
-
-        state.pages_data.data.append(PageData(
-          questions_count=len(all_questions),
-          is_instructions_page=False,
-          is_corrections_table_page=False
-        ))
-
-        await self.handle_quota()
-
-        state.questions_markdown_text += "\n" + response.content
-
-      print(f"🔍 Questions Markdown Text")
-      print(state.questions_markdown_text)
-
-      structured_llm = self.gLlm.with_structured_output(PageQuestions)
-      response: PageQuestions = await structured_llm.ainvoke([
-        SystemMessage(
-          content=[
-            {
-              "type": "text",
-              "text": "You are an expert parsing agent. Your task is to accurately parse the user's text, which is a markdown representation of an exam, and extract all the questions into the provided 'PageQuestions' schema. Pay close attention to question numbers, the full question text, and all associated options. questions are delimited by a line containing only '---' before and after the question, and the question number is the first number in the question text, and the options are preceded by a letter and a period, the number of options is the number of letter preceeding it."
-            }
-          ]
-        ),
-        HumanMessage(
-          content=[
-            {
-              "type": "text",
-              "text": state.questions_markdown_text.replace('---', '\n')
-            }
-          ]
+    def _extract_all_questions_step(self, pdf_base64_string: str) -> Document:
+        """
+        Takes a base64 encoded PDF and extracts all questions from it in a single call.
+        """
+        print("🚀 Executing PDF native extraction strategy...")
+        message = HumanMessage(
+            content=[
+                {"type": "text", "text": EXTRACT_ALL_FROM_DOCUMENT_PROMPT},
+                {
+                    "type": "media",
+                    "data": pdf_base64_string,
+                    "mime_type": "application/pdf",
+                },
+            ]
         )
-      ])
-
-      state.questions = response.questions
-
-      return state
-
-    async def _extract_document_text_conditional_edges(self, state: DocumentExtractionState) -> str:
-      if state.current_page_index < len(state.exam_images):
-        return "extract_document_text"
-      else:
-        return "extract_document_clinical_case"
-
-    async def _extract_document_pages_data_step(self, state: DocumentExtractionState) -> DocumentExtractionState:
-
-      return state
-
-      print(f"🔍 Extracting Document Pages Data")
-
-      structured_llm = self.gLlm.with_structured_output(PageDataOutput)
-
-      # Use the extract_document_text.j2 template for the prompt
-      messages = [
-          SystemMessage(
-              content=[
-                  {
-                      "type": "text",
-                      "text": "You are a helpful assistant that extracts the pages data from the image of the exam page. You only return the response, not confirmation, no greetings, no explanations, no nothing. Just the final result based on user's request."
-                  }
-              ]
-          ),
-          HumanMessage(
-              content=[
-                  {
-                      "type": "text",
-                      "text": render_template('extract_document_pages_data', {
-                         "questions_count": len(state.questions)
-                      })
-                  },
-                  *[
-                      {
-                          "type": "image",
-                          "source_type": "base64",
-                          "data": img,
-                          "mime_type": "image/jpeg",
-                      }
-                      for img in state.exam_images
-                  ],
-              ]
-          )
-      ]
-
-      response: PageDataOutput = await structured_llm.ainvoke(messages)
-      print(f"🔍 Extracted Document Pages Data")
-
-      await self.handle_quota()
-
-      state.pages_data = response
-
-      return state
-
-    async def _extract_document_clinical_case_step(self, state: DocumentExtractionState) -> DocumentExtractionState:
-      print(f"🔍 Extracting Document Clinical Case")
-
-      structured_llm = self.gLlm.with_structured_output(DocumentClinicalCaseOutput)
-
-      formatted_questions = []
-      for i, question in enumerate(state.questions):
-        question_text = f"{i + 1}- {question.question}\n"
-        for idx, option in enumerate(question.options):
-          question_text += f"{chr(65 + idx)}- {option.option}\n"
-        formatted_questions.append(question_text)
-
-      # Use the extract_document_text.j2 template for the prompt
-      messages = [
-          SystemMessage(
-              content=[
-                  {
-                      "type": "text",
-                      "text": "You are a helpful assistant that extracts the clinical case from the image of the exam page. You only return the response, not confirmation, no greetings, no explanations, no nothing. Just the final result based on user's request."
-                  }
-              ]
-          ),
-          HumanMessage(
-              content=[
-                  {
-                      "type": "text",
-                      "text": render_template('extract_document_clinical_case', {
-                        "questions_markdown_text": "---".join(formatted_questions)
-                      })
-                  },
-                  *[
-                    {
-                      "type": "image",
-                      "source_type": "base64",
-                      "data": img,
-                      "mime_type": "image/jpeg",
-                    } for img in state.exam_images
-                  ]
-              ]
-          )
-      ]
-
-      response: DocumentClinicalCaseOutput = await structured_llm.ainvoke(messages)
-      print(f"🔍 Extracted Document Clinical Case")
-
-      clinical_cases_list: List[ClinicalCaseResponse] = []
-      for clinical_case in response.data:
-        print(f"Clinical Case: {clinical_case}")
-        clinical_cases_list.append(ClinicalCaseResponse(
-          question_numbers=list(range(clinical_case.start_question_number, clinical_case.end_question_number + 1)),
-          clinical_case=clinical_case.clinical_case,
-          type="clinicalCase",
-          images=[]
-        ))
-
-      state.pages_clinical_cases = clinical_cases_list
-
-      print("Pages Clinical Cases")
-      print(state.pages_clinical_cases)
-
-      await self.handle_quota()
-
-      return state
-
-    async def _format_extracted_data(self, state: DocumentExtractionState) -> Dict[str, Any]:
-      print(f"🔍 Formatting Extracted Data")
-
-      return state
-
-    async def handle_quota(self):
-        self.gLlmCalls += 1
-        time_to_wait = 30
-
-        if self.gLlmCalls % self.max_quota == 0:
-            print(f"🔍 Quota Reached, Sleeping for {time_to_wait} seconds")
-            await asyncio.sleep(time_to_wait)
-
-    async def run(self, pdf_path: str = None, exam_images: list = None) -> DocumentExtractionState:
-        """
-        Run the workflow with either a PDF path or pre-extracted images.
         
-        Args:
-            pdf_path: Path to PDF file (optional)
-            exam_images: Pre-extracted images (optional)
+        print("📄 Sending the entire PDF to the model in a single request...")
+        document = self._structured_model.invoke([message])
         
-        Returns:
-            ExtractionState: Final state with extracted questions
+        if document and document.questions:
+            print(f"✅ Successfully extracted {len(document.questions)} questions.")
+        else:
+            print("⚠️ Model did not return any questions.")
+
+        return document
+
+    def run(self, pdf_input: str, from_local_file: bool = False) -> Document:
         """
-        if exam_images is None:
-          if pdf_path is None:
-              import os
-              # Fallback to hardcoded path for backward compatibility
-              pdf_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "file.pdf"))
-          exam_images = extract_pdf_pages_as_images(pdf_path=pdf_path)
+        The main entry point for the workflow.
+        It can accept either a path to a local PDF file or a base64 encoded string of a PDF.
+        """
+        pdf_base64_string = pdf_input
+        if from_local_file:
+            print(f"📦 Loading PDF from local file: {pdf_input}")
+            with open(pdf_input, "rb") as f:
+                pdf_base64_string = base64.b64encode(f.read()).decode("utf-8")
+        else:
+            # The input is already a base64 string.
+            print("📦 Received PDF as base64 string.")
 
-        initial_state = DocumentExtractionState()
-        # Only use page 5 (index 4) from exam_images
-        initial_state.exam_images = exam_images
-        initial_state.pdf_path = pdf_path
-        final_state = await self.workflow.ainvoke(initial_state, {
-            "recursion_limit": 120
-        })
-
-        return DocumentExtractionState(**final_state)
+        document = self._extract_all_questions_step(pdf_base64_string)
+        return document

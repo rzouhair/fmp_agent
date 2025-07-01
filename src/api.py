@@ -1,16 +1,18 @@
-import tempfile
-import os
-import traceback
 import base64
-from typing import List, Dict, Any
+from typing import List
 from fastapi import FastAPI, HTTPException, Body
-from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
-from src.models import ClinicalCaseResponse, ExtractionResponse, OptionResponse, QuestionResponse
+from src.models import (
+    ClinicalCaseResponse,
+    ExtractionResponse,
+    OptionResponse,
+    QuestionResponse,
+    Question,
+    Document,
+)
+from .gemini_workflow import GeminiWorkflow
 
-from .workflow import Workflow
-from .utils.pdf import extract_pdf_pages_as_images
 
 class Base64FileRequest(BaseModel):
     base64: str = Field(..., description="Base64 encoded PDF file data")
@@ -19,22 +21,21 @@ class Base64FileRequest(BaseModel):
 app = FastAPI(
     title="PDF Question Extractor API",
     description="Extract multiple choice questions from PDF exam files",
-    version="1.0.0"
+    version="2.0.0",  # Version bump to reflect new implementation
 )
 
 
 @app.post("/extract-questions", response_model=ExtractionResponse)
-async def extract_questions_from_pdf(
+def extract_questions_from_pdf(
     request: Base64FileRequest = Body(..., description="Base64 encoded PDF file data")
 ) -> ExtractionResponse:
     """
-    Extract multiple choice questions from a PDF file.
+    Extract multiple choice questions from a PDF file using Gemini 1.5 Pro.
     
     The API accepts base64 encoded PDF data and will:
-    1. Decode the base64 PDF data
-    2. Convert PDF pages to images
-    3. Use AI to extract questions and options
-    4. Return structured JSON with all questions
+    1. Send the PDF directly to the AI model.
+    2. The model analyzes the entire document, including text and layout.
+    3. Return structured JSON with all questions.
     
     Args:
         request: Base64 encoded PDF data (JSON body)
@@ -42,118 +43,77 @@ async def extract_questions_from_pdf(
     Returns:
         ExtractionResponse: Structured response with extracted questions
     """
-    
-    filename = "document.pdf"  # Default filename for base64 uploads
-    
     try:
-        # Decode base64 data
-        file_data = base64.b64decode(request.base64)
-    except Exception as e:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Invalid base64 data: {str(e)}"
-        )
-    
-    # Create temporary file to store the PDF data
-    temp_file_path = None
-    try:
-        # Create temporary file
-        with tempfile.NamedTemporaryFile(delete=False, suffix='.pdf') as temp_file:
-            temp_file_path = temp_file.name
-            
-            # Write file data to temporary file
-            temp_file.write(file_data)
-            temp_file.flush()
+        # 1. Initialize the new workflow
+        workflow = GeminiWorkflow()
+
+        # 2. Run the workflow directly with the base64 string
+        # This is now a synchronous call
+        document: Document = workflow.run(pdf_input=request.base64, from_local_file=False)
+
+        # 3. Map the results to the API response models
+        questions_response: List[QuestionResponse] = []
+        clinical_cases_response: List[ClinicalCaseResponse] = []
         
-        # Process the PDF through the workflow
-        workflow = Workflow()
-        
-        # Run the workflow with the temporary PDF file
-        final_state = await workflow.run(pdf_path=temp_file_path)
-        
-        # Convert the extracted questions to response format
-        questions_response = []
-        for question in final_state.exam_questions:
+        # Keep track of clinical cases to avoid duplicates
+        processed_clinical_cases = set()
+
+        for question in document.questions:
+            # Map question and options
             question_response = QuestionResponse(
                 questionString=question.question,
                 explanation="",
                 tag="",
-                options=[OptionResponse(option=option.option, isCorrect=False, justification="", images=[]) for option in question.options]
+                options=[
+                    OptionResponse(option=opt.option, isCorrect=False, justification="", images=[])
+                    for opt in question.options
+                ],
             )
             questions_response.append(question_response)
 
-        clinical_cases_response: List[ClinicalCaseResponse] = []
-        for page_index, clinical_cases in final_state.pages_clinical_cases_map.items():
-            
-            if len(final_state.pages_questions_map[f"{page_index}"].question_numbers) > 0:
-                first_question_number = final_state.pages_questions_map[f"{page_index}"].question_numbers[0]
-            else:
-                first_question_number = None
-            for clinical_case_text in clinical_cases:
+            # Map clinical case if it exists and hasn't been processed yet
+            if question.clinical_case and question.clinical_case not in processed_clinical_cases:
                 cc_resp = ClinicalCaseResponse(
-                    question_numbers=[first_question_number if first_question_number is not None else 0],
-                    clinical_case=clinical_case_text,
+                    question_numbers=[q.question_number for q in document.questions if q.clinical_case == question.clinical_case],
+                    clinical_case=question.clinical_case,
                     type="clinicalCase",
                     images=[],
                 )
-
                 clinical_cases_response.append(cc_resp)
-
-        final_page_numbers = []
-        for page_index, page_numbers in final_state.pages_questions_map.items():
-            final_page_numbers.append(list(map(lambda x: x - 1, page_numbers.question_numbers)))
-
-        # Remove the temporary file after finishing the extraction
-        if temp_file_path and os.path.exists(temp_file_path):
-            try:
-                os.unlink(temp_file_path)
-            except Exception as e:
-                print(f"Warning: Could not delete temporary file {temp_file_path}: {e}")
+                processed_clinical_cases.add(question.clinical_case)
 
         return ExtractionResponse(
             success=True,
             total_questions=len(questions_response),
             questions=questions_response,
             clinical_cases=clinical_cases_response,
-            pages_questions_map=final_state.pages_questions_map,
-            page_numbers=final_page_numbers,
-            message=f"Successfully extracted {len(questions_response)} questions from {filename}"
+            pages_questions_map={},  # This is deprecated by the new model
+            page_numbers=[],  # This is deprecated by the new model
+            message=f"Successfully extracted {len(questions_response)} questions."
         )
-        
+
     except Exception as e:
-        print(f"Error processing PDF: {str(e)}")
-        print(traceback.format_exc())
-        raise HTTPException(
-            status_code=500,
-            detail=f"Error processing PDF: {str(e)}"
-        )
-    
-    finally:
-        # Clean up temporary file
-        if temp_file_path and os.path.exists(temp_file_path):
-            try:
-                os.unlink(temp_file_path)
-            except Exception as e:
-                print(f"Warning: Could not delete temporary file {temp_file_path}: {e}")
+        # The new workflow already prints traceback, so we can keep this simpler
+        raise HTTPException(status_code=500, detail=f"An unexpected error occurred: {str(e)}")
 
 
 @app.get("/health")
-async def health_check():
+def health_check():
     """Health check endpoint"""
     return {"status": "healthy", "message": "PDF Question Extractor API is running"}
 
 
 @app.get("/")
-async def root():
+def root():
     """Root endpoint with API information"""
     return {
         "message": "PDF Question Extractor API",
-        "version": "1.0.0",
+        "version": "2.0.0",
         "endpoints": {
             "POST /extract-questions": "Extract questions from PDF file (base64 only)",
             "GET /health": "Health check",
-            "GET /docs": "API documentation"
-        }
+            "GET /docs": "API documentation",
+        },
     }
 
 
