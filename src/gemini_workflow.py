@@ -20,8 +20,9 @@ class GeminiWorkflow:
     def __init__(self):
 
         # self.llm = ChatOpenAI(model="gpt-4o-mini", temperature=0.2)
-        self.llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash-preview-04-17", temperature=0.5, google_api_key=os.getenv("GOOGLE_API_KEY"))
-        self.gLlm = self.llm
+        self.proLlm = ChatGoogleGenerativeAI(model="gemini-2.5-pro", temperature=0.0, google_api_key=os.getenv("GOOGLE_API_KEY"))
+        self.gLlm = ChatGoogleGenerativeAI(model="gemini-2.5-flash", temperature=0.0, google_api_key=os.getenv("GOOGLE_API_KEY"))
+
         self.gLlmCalls = 0
         self.max_quota = 10
 
@@ -137,7 +138,7 @@ class GeminiWorkflow:
 
       """ structured_llm = self.gLlm.with_structured_output(PageQuestions)
       response: PageQuestions = await structured_llm.ainvoke(messages) """
-      response = self.gLlm.invoke(messages)
+      response = self.proLlm.invoke(messages)
       print(f"🔍 Extracted Document Text for Page")
       print(response)
 
@@ -148,6 +149,7 @@ class GeminiWorkflow:
       return state
 
     async def _review_document_text_step(self, state: DocumentExtractionState) -> DocumentExtractionState:
+      return state
       #current_page_index = state.current_page_index
       #print(f"🔍 Extracting Document Text for Document Page {current_page_index}")
       print(f"🔍 Extracting Document Text for Document")
