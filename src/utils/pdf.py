@@ -8,7 +8,7 @@ import io
 import cv2
 import numpy as np
 
-def extract_pdf_pages_as_images(pdf_path: str, dpi: int = 200) -> List[str]:
+def extract_pdf_pages_as_images(pdf_path: str, dpi: int = 100) -> List[str]:
     """
     Extract pages from a PDF file and convert them to a list of base64-encoded images.
 
@@ -37,7 +37,7 @@ def extract_pdf_pages_as_images(pdf_path: str, dpi: int = 200) -> List[str]:
         )
 
         # Upscale each image to a larger resolution (e.g., 2x the original size)
-        upscale_factor = 2  # You can adjust this factor as needed
+        upscale_factor = 1  # You can adjust this factor as needed
         base64_images = []
         for idx, img in enumerate(images):
             orig_width, orig_height = img.width, img.height
@@ -57,7 +57,7 @@ def extract_pdf_pages_as_images(pdf_path: str, dpi: int = 200) -> List[str]:
 
 
 def save_pdf_pages_as_images(pdf_path: str, output_dir: str, 
-                            image_format: str = 'PNG', dpi: int = 200) -> List[str]:
+                            image_format: str = 'PNG', dpi: int = 100) -> List[str]:
     """
     Extract PDF pages and save them as image files.
     
@@ -149,7 +149,7 @@ def extract_images_from_page_base64(page_base64: str) -> List[bytes]:
 
     return extracted_images
 
-def extract_images_from_pdf(pdf_path: str, dpi: int = 200) -> Dict[int, List[bytes]]:
+def extract_images_from_pdf(pdf_path: str, dpi: int = 100) -> Dict[int, List[bytes]]:
     """
     For each page in a PDF, detect and extract images embedded within the page.
 
